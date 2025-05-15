@@ -49,35 +49,7 @@ kvmmake(void)
   return kpgtbl;
 }
 
-static void rec_vmprint(pagetable_t pagetable, int level); // 前置声明
 
-void
-vmprint(pagetable_t pagetable)
-{
-  printf("page table %p\n", (void*)pagetable);
-  rec_vmprint(pagetable, 1);
-}
-
-static void
-rec_vmprint(pagetable_t pagetable, int level)
-{
-  for (int i = 0; i < 512; i++) {
-    pte_t pte = pagetable[i];
-    if (pte & PTE_V) {
-      // 缩进
-      for (int j = 0; j < level; j++) {
-        if (j == 0) printf("..");
-        else printf(" ..");
-      }
-      // 打印 PTE 信息
-      printf("%d: pte %p pa %p\n", i, (void*)pte, (void*)PTE2PA(pte));
-      // 递归非叶节点
-      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
-        rec_vmprint((pagetable_t)PTE2PA(pte), level + 1);
-      }
-    }
-  }
-}
 
 // Initialize the one kernel_pagetable
 void
