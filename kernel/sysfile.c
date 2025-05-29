@@ -328,6 +328,23 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    int depth = 0;
+    while (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
+      // recurisively follow symlink
+      readi(ip, 0, (uint64)path, 0, MAXPATH);
+      iunlockput(ip);
+      ip = namei(path);
+      if (!ip) {
+        end_op();
+        return -1;
+      }
+      ++depth;
+      if (depth > 10) {
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+    }
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -501,5 +518,35 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH]; // origin file to symlink
+  char path[MAXPATH]; // file type is symlink
+  struct inode *ip;
+  int n;
+
+  if((n = argstr(0, target, MAXPATH)) < 0)
+    return -1;
+  if(argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  // write target to symlink file
+  if (writei(ip, 0, (uint64)target, 0, n) < n)
+    panic("symlink error: write target path");
+
+  iunlockput(ip);
+  end_op();
+
   return 0;
 }
