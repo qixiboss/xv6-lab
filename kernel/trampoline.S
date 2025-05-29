@@ -15,7 +15,6 @@
 
 .section trampsec
 .globl trampoline
-.globl usertrap
 trampoline:
 .align 4
 .globl uservec
@@ -80,6 +79,7 @@ uservec:
 
         # load the address of usertrap(), from p->trapframe->kernel_trap
         ld t0, 16(a0)
+
 
         # fetch the kernel page table address, from p->trapframe->kernel_satp.
         ld t1, 0(a0)

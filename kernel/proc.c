@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -296,6 +300,19 @@ fork(void)
   }
   np->sz = p->sz;
 
+  // Copy mmap vam from parent to child.
+  for (int i=0; i<16; ++i) {
+    struct vma* vma = &p->vma[i];
+    if (vma->addr != 0) {
+      np->vma[i].addr = vma->addr;
+      np->vma[i].offset = vma->offset;
+      np->vma[i].length = vma->length;
+      np->vma[i].flags = vma->flags;
+      np->vma[i].prot = vma->prot;
+      np->vma[i].file = filedup(vma->file);
+    }
+  }
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -359,6 +376,35 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+
+  // free mmap vma
+  for (int i=0; i<16; ++i) {
+    struct vma* vma = &p->vma[i];
+    if (vma->addr != 0) {
+      struct file* f = vma->file;
+      uint64 va_start = vma->addr;
+      for (uint64 off=0; off < vma->length; off += PGSIZE) {
+        if (walkaddr(p->pagetable, va_start+off)) {
+          if (vma->flags == MAP_SHARED) {
+            // write back to file
+            for (int off1=0; off1<4*BSIZE; off1 += 2*BSIZE) {
+              begin_op();
+              ilock(f->ip);
+              if (writei(f->ip, 1, va_start+off+off1, vma->offset+off+off1, 2*BSIZE) <= 0)
+                printf("error: unmap filewrite\n");
+              iunlock(f->ip);
+              end_op();
+            }
+          }
+          uvmunmap(p->pagetable, va_start+off, 1, 1);
+        }
+      }
+      fileclose(vma->file);
+      memset(vma, 0, sizeof(struct vma));
+    }
+  }
+
 
   begin_op();
   iput(p->cwd);
@@ -446,15 +492,12 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-
+  
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting.
+    // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
@@ -468,14 +511,8 @@ scheduler(void)
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-        found = 1;
       }
       release(&p->lock);
-    }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      intr_on();
-      asm volatile("wfi");
     }
   }
 }
@@ -532,11 +569,8 @@ forkret(void)
     // File system initialization must be run in the context of a
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
-    fsinit(ROOTDEV);
-
     first = 0;
-    // ensure other cores see first=0.
-    __sync_synchronize();
+    fsinit(ROOTDEV);
   }
 
   usertrapret();

@@ -503,3 +503,109 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  struct file *f;
+  uint64 addr;
+  int length, offset, prot, flags;
+
+  argaddr(0, &addr); // assume 0
+  argint(1, &length);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(5, &offset); // assume 0
+  if(argfd(4, 0, &f) < 0)
+    return -1;
+
+  if (length%PGSIZE || addr || offset) {
+    printf("error: break mmap asumption addr=%d, length=%d, offset=%d", addr, length, offset);
+    return -1;
+  }
+
+  // should be able to map file opened read-only with private writable
+  // mapping
+  if (f->writable == 0 && flags == MAP_SHARED && prot&PROT_WRITE)
+    return -1;
+
+  struct proc* p = myproc();
+  struct vma* vma;
+  for (int i=0; i<16; ++i) {
+    vma = &p->vma[i];
+    if (vma->addr == 0) {
+        vma->addr = p->sz; // alloc mmap addr in heap
+        vma->file = filedup(f);
+        vma->length = length;
+        vma->offset = 0;
+        vma->flags = flags;
+        vma->prot = prot;
+        p->sz += length;
+        return vma->addr;
+    }
+  }
+
+  return -1;
+}
+
+uint64
+sys_munmap(void)
+{
+  int length;
+  uint64 addr;
+
+  argaddr(0, &addr);
+  argint(1, &length);
+
+  struct proc* p = myproc();
+  if (addr%PGSIZE || length%PGSIZE) {
+    printf("error: break munmap asumption addr=%d, length=%d", addr, length);
+    return -1;
+  }
+
+  struct vma* vma;
+  uint64 va_start, va_end;
+  for (int i=0; i<16; ++i) {
+    vma = &p->vma[i];
+    struct file* f = vma->file;
+    va_start = vma->addr;
+    va_end = va_start + vma->length;
+    // assume that it will either unmap at the start, or at the end,
+    // or the whole region (but not punch a hole in the middle of a region).
+    if (vma->addr != 0 && addr >= va_start && addr < va_end) {
+        if (addr + length > va_start + vma->length) {
+          printf("error: unmap out of range\n");
+          setkilled(p);
+          return -1;
+        }
+        uint f_off = vma->offset + addr - va_start;
+        for (uint64 off=0; off < length; off += PGSIZE) {
+          if (walkaddr(p->pagetable, addr+off)) {
+            if (vma->flags == MAP_SHARED) {
+              // write back to file
+              for (int off1=0; off1<4*BSIZE; off1 += 2*BSIZE) {
+                begin_op();
+                ilock(f->ip);
+                if (writei(f->ip, 1, addr+off+off1, f_off+off+off1, 2*BSIZE) <= 0)
+                  printf("error: unmap filewrite\n");
+                iunlock(f->ip);
+                end_op();
+              }
+            }
+            uvmunmap(p->pagetable, addr+off, 1, 1);
+          }
+        }
+        if (addr == va_start) {
+          vma->addr += length;
+          vma->offset += length;
+        }
+        vma->length -= length;
+        if (vma->length == 0) {
+          fileclose(vma->file);
+          memset(vma, 0, sizeof(struct vma));
+        }
+        return vma->addr;
+    }
+  }
+  return -1;
+}
