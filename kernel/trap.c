@@ -41,33 +41,46 @@ usertrap(void)
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
+  // 设置 trap 入口为内核的中断向量
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
-  // save user program counter.
-  p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
-    // system call
 
+  // 保存用户程序的 PC
+  p->trapframe->epc = r_sepc();
+
+  uint64 cause = r_scause();
+
+  if(cause == 8){
+    // 系统调用
     if(killed(p))
       exit(-1);
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
     p->trapframe->epc += 4;
-
-    // an interrupt will change sepc, scause, and sstatus,
-    // so enable only now that we're done with those registers.
     intr_on();
-
     syscall();
   } else if((which_dev = devintr()) != 0){
-    // ok
+    // 外设中断
+  } else if(cause == 13 || cause == 15){
+    // 页面错误（load/store fault）
+    uint64 fault_va = r_stval();  // 触发错误的虚拟地址
+    char* pa;
+
+    if(PGROUNDUP(p->trapframe->sp) - 1 < fault_va && fault_va < p->sz &&
+       (pa = kalloc()) != 0){
+      memset(pa, 0, PGSIZE);
+      if(mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa,
+                  PTE_R | PTE_W | PTE_X | PTE_U) != 0){
+        kfree(pa);
+        setkilled(p);
+      }
+    } else {
+      // 地址不合法或内存不足
+      setkilled(p);
+    }
+
   } else {
+    // 未处理的 trap 类型
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);
@@ -76,7 +89,7 @@ usertrap(void)
   if(killed(p))
     exit(-1);
 
-  // give up the CPU if this is a timer interrupt.
+  // 如果是时钟中断，就主动放弃 CPU
   if(which_dev == 2)
     yield();
 

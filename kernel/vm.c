@@ -185,9 +185,9 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      continue;  // 页表项为空，跳过
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue;  // 没有映射的页，跳过
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -319,9 +319,10 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      continue; // lazy 分配尚未建立 PTE，跳过
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue; // 没有实际分配物理页，跳过
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -338,6 +339,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
+
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.

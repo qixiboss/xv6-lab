@@ -38,15 +38,30 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  uint64 addr;
+  int addr;
   int n;
+  struct proc* p = myproc();
 
-  argint(0, &n);
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
+  if(argint(0, &n) < 0)
     return -1;
+
+  addr = p->sz;
+  uint64 sz = p->sz;
+
+  if(n > 0){
+    // 不分配物理页，仅增加 sz
+    p->sz += n;
+  } else if(sz + n > 0){
+    // 缩减内存：释放页表映射
+    sz = uvmdealloc(p->pagetable, sz, sz + n);
+    p->sz = sz;
+  } else {
+    return -1;
+  }
+
   return addr;
 }
+
 
 uint64
 sys_sleep(void)
